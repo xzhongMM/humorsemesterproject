@@ -171,10 +171,14 @@ export default async function Home({
                         </dd>
                       </dl>
                     </div>
-                    <ArrowRightIcon
-                      aria-hidden
-                      className="h-5 w-5 shrink-0 text-[var(--accent-strong)]"
-                    />
+                    <span className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-[var(--accent-strong)]">
+                      {isStudyCompleted(participationByStudy.get(study.id))
+                        ? "View stats"
+                        : participationByStudy.get(study.id)?.started_at
+                          ? "Continue"
+                          : "Start"}
+                      <ArrowRightIcon aria-hidden className="h-5 w-5" />
+                    </span>
                   </Link>
                 </li>
               ))}

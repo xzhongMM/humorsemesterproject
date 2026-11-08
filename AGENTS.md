@@ -64,6 +64,7 @@ Purpose: Quick orientation for anyone editing the project. Keep this file curren
 - Keep this doc updated when adding routes, changing auth flow, or adjusting environment requirements.
 
 ## Change log
+- 2026-11-08: Home study cards now show a text label beside the arrow: `Start` for a new study, `Continue` when in progress, and `View stats` when completed. (assistant)
 - 2026-11-07: Like (button, right swipe, or `ArrowRight`) now saves the like in the background and immediately advances to the next caption; liking an already-liked caption just advances. A 400 ms cooldown prevents a rapid double click from also liking the next caption. Double-tap on the image/caption still toggles the like without advancing. (assistant)
 - 2026-11-07: Matched the study vote controls to their gestures: Pass now sits on the left and Like on the right in both button rows (with ←/→ arrows), and in-flow, non-interactive side labels (rose `← Pass` on the left, emerald `Like →` on the right) flank the caption card without overlapping it. Swipe/arrow-key mapping is unchanged (left = pass/next caption, right = like). Welcome copy updated to match. (assistant)
 - 2026-10-03: Scoped Supabase auth cookies to Humor Study consistently across browser, server, and proxy clients, and made both sign-out actions revoke only the current session. Existing shared cookies are ignored, requiring one new app sign-in after release. Verified real-SDK session isolation and local logout with controlled cookies and mocked Auth HTTP; the legacy shared cookie remains untouched. (assistant)
