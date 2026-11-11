@@ -1,5 +1,9 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
-import { shuffleStudyCaptionIds, STUDY_CAPTION_BATCH_SIZE } from "@/lib/study-caption-order";
+import {
+  resolveStudyCaptionIndex,
+  restoreStudyCaptionOrder,
+  STUDY_CAPTION_BATCH_SIZE,
+} from "@/lib/study-caption-order";
 
 const INITIAL_ACTIVE_STUDY_CAPTION_COUNT = 60;
 
@@ -463,17 +467,24 @@ export async function fetchInitialActiveStudyCaptions(
     includePrivateStudies = false,
     minimumCount = INITIAL_ACTIVE_STUDY_CAPTION_COUNT,
     now = new Date(),
+    savedCaptionOrder,
+    savedCurrentCaptionId,
+    savedCurrentCaptionIndex,
     studyId = null,
   }: {
     includePrivateStudies?: boolean;
     minimumCount?: number;
     now?: Date;
+    savedCaptionOrder?: readonly string[] | null;
+    savedCurrentCaptionId?: string | null;
+    savedCurrentCaptionIndex?: number | null;
     studyId?: number | null;
   } = {}
 ): Promise<{
   captionOrder: string[];
   captions: ViewerActiveStudyCaption[];
   error: PostgrestError | null;
+  initialStartOffset: number;
   nextOffset: number | null;
 }> {
   const normalizedMinimumCount =
@@ -485,14 +496,28 @@ export async function fetchInitialActiveStudyCaptions(
     studyId,
   });
   if (error) {
-    return { captionOrder: [], captions: [], error, nextOffset: null };
+    return {
+      captionOrder: [],
+      captions: [],
+      error,
+      initialStartOffset: 0,
+      nextOffset: null,
+    };
   }
 
-  // Shuffle the entire lightweight ID list once, before fetching any content.
-  // Later batches use this snapshot even if mappings change during the run.
-  const captionOrder = shuffleStudyCaptionIds(ids);
+  // Keep the run's shuffled order stable across visits while still dropping
+  // captions that are no longer available and appending newly mapped captions.
+  const captionOrder = restoreStudyCaptionOrder(ids, savedCaptionOrder);
+  const initialStartOffset = savedCaptionOrder?.length
+    ? resolveStudyCaptionIndex(
+        captionOrder,
+        savedCurrentCaptionId,
+        savedCurrentCaptionIndex
+      )
+    : 0;
   const captions: ViewerActiveStudyCaption[] = [];
-  let nextOffset: number | null = captionOrder.length ? 0 : null;
+  let nextOffset: number | null =
+    initialStartOffset < captionOrder.length ? initialStartOffset : null;
 
   while (nextOffset !== null && captions.length < normalizedMinimumCount) {
     const batchIds = captionOrder.slice(
@@ -511,6 +536,7 @@ export async function fetchInitialActiveStudyCaptions(
         captionOrder: [],
         captions: [],
         error: page.error,
+        initialStartOffset: 0,
         nextOffset: null,
       };
     }
@@ -524,6 +550,7 @@ export async function fetchInitialActiveStudyCaptions(
     captionOrder,
     captions,
     error: null,
+    initialStartOffset,
     nextOffset,
   };
 }

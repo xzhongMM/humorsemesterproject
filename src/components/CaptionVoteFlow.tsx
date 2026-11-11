@@ -11,7 +11,11 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import { endStudy, startStudy } from "@/app/study/actions";
+import {
+  endStudy,
+  saveStudyProgress,
+  startStudy,
+} from "@/app/study/actions";
 import type { StudyParticipation } from "@/lib/study-participation";
 import type { StudyStats } from "@/lib/study-stats";
 import { CompletedStudy } from "@/components/CompletedStudy";
@@ -378,6 +382,7 @@ export function CaptionVoteFlow({
   captionOrder,
   captions,
   includePrivateStudies,
+  initialStartOffset,
   initialNextOffset,
   initialTotalCaptionCount,
   initialParticipation,
@@ -388,6 +393,7 @@ export function CaptionVoteFlow({
   captionOrder: string[];
   captions: CaptionForVote[];
   includePrivateStudies?: boolean;
+  initialStartOffset: number;
   initialNextOffset: number | null;
   initialTotalCaptionCount: number;
   initialParticipation: StudyParticipation | null;
@@ -403,6 +409,7 @@ export function CaptionVoteFlow({
   );
   const [queue, setQueue] = useState(captions);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [queueStartOffset, setQueueStartOffset] = useState(initialStartOffset);
   const [isShortViewport, setIsShortViewport] = useState(false);
   const [isLoadingMoreCaptions, setIsLoadingMoreCaptions] = useState(false);
   const [nextCaptionOffset, setNextCaptionOffset] = useState(initialNextOffset);
@@ -410,6 +417,7 @@ export function CaptionVoteFlow({
   const [participation, setParticipation] = useState(initialParticipation);
   const [participationPending, setParticipationPending] = useState(false);
   const participationPendingRef = useRef(false);
+  const progressSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastLikeAdvanceAtMsRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [captionFlipDirection, setCaptionFlipDirection] =
@@ -483,9 +491,12 @@ export function CaptionVoteFlow({
     setQueue(captions);
     setVoteStatuses(createPersistedVoteStatusLookup(captions));
     setIsCompletionPageVisible(false);
+    setCurrentIndex(0);
+    currentIndexRef.current = 0;
+    setQueueStartOffset(initialStartOffset);
     setNextCaptionOffset(initialNextOffset);
     requestedCaptionOffsetsRef.current.clear();
-  }, [captions, initialNextOffset]);
+  }, [captions, initialNextOffset, initialStartOffset]);
 
   useEffect(() => {
     return () => {
@@ -574,7 +585,7 @@ export function CaptionVoteFlow({
   const totalCaptionCount = Math.max(initialTotalCaptionCount, queue.length);
   const currentCaptionNumber =
     current && totalCaptionCount > 0
-      ? Math.min(totalCaptionCount, currentIndex + 1)
+      ? Math.min(totalCaptionCount, queueStartOffset + currentIndex + 1)
       : null;
   const captionProgressLabel =
     currentCaptionNumber && totalCaptionCount > 0
@@ -856,6 +867,42 @@ export function CaptionVoteFlow({
     }
   }, []);
 
+  const saveProgressAtIndex = useCallback(
+    (captionIndex: number) => {
+      if (!studyId) {
+        return;
+      }
+
+      const progressSave = progressSaveChainRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const result = await saveStudyProgress(studyId, captionIndex);
+            if (!result.success) {
+              console.error("[CaptionVoteFlow] save study progress failed", result.error);
+              setError(result.error);
+              return;
+            }
+
+            setError((currentError) =>
+              currentError ===
+              "We couldn't save your latest study progress. Please try again."
+                ? null
+                : currentError
+            );
+          } catch (err) {
+            console.error("[CaptionVoteFlow] save study progress failed", err);
+            setError(
+              "We couldn't save your latest study progress. Please try again."
+            );
+          }
+        });
+
+      progressSaveChainRef.current = progressSave;
+    },
+    [studyId]
+  );
+
   const loadMoreCaptions = useCallback(
     async (offset: number) => {
       if (
@@ -896,6 +943,83 @@ export function CaptionVoteFlow({
       }
     },
     [appendCaptionBatch, captionOrder, includePrivateStudies, isLoadingMoreCaptions, studyId]
+  );
+
+  const loadPreviousCaptions = useCallback(
+    async (endOffset: number) => {
+      const startOffset = Math.max(0, endOffset - STUDY_CAPTION_BATCH_SIZE);
+      if (
+        startOffset >= endOffset ||
+        isLoadingMoreCaptions ||
+        requestedCaptionOffsetsRef.current.has(startOffset)
+      ) {
+        return;
+      }
+
+      requestedCaptionOffsetsRef.current.add(startOffset);
+      setIsLoadingMoreCaptions(true);
+
+      try {
+        const captionIds = captionOrder.slice(startOffset, endOffset);
+        const result = await loadMoreCaptionVoteCaptions({
+          captionIds,
+          includePrivateStudies,
+          studyId,
+        });
+
+        if (!result.success) {
+          requestedCaptionOffsetsRef.current.delete(startOffset);
+          setError(
+            result.error ?? "We couldn't load earlier captions. Please try again."
+          );
+          return;
+        }
+
+        const incomingCaptions = result.captions;
+        if (!incomingCaptions.length) {
+          requestedCaptionOffsetsRef.current.delete(startOffset);
+          setError("We couldn't find an earlier caption to resume.");
+          return;
+        }
+
+        setQueue((previousQueue) => [...incomingCaptions, ...previousQueue]);
+        setVoteStatuses((previousVoteStatuses) => {
+          const nextVoteStatuses = { ...previousVoteStatuses };
+          incomingCaptions.forEach((caption) => {
+            if (!caption.isLiked) {
+              return;
+            }
+
+            const voteKey = getCaptionVoteKey(caption);
+            if (voteKey) {
+              nextVoteStatuses[voteKey] = "saved";
+            }
+          });
+          return nextVoteStatuses;
+        });
+
+        const actualStartOffset = endOffset - incomingCaptions.length;
+        const previousCaptionIndex = incomingCaptions.length - 1;
+        setQueueStartOffset(actualStartOffset);
+        currentIndexRef.current = previousCaptionIndex;
+        setCurrentIndex(previousCaptionIndex);
+        setCaptionFlipDirection("backward");
+        saveProgressAtIndex(actualStartOffset + previousCaptionIndex);
+      } catch (err) {
+        console.error("[CaptionVoteFlow] load previous captions failed", err);
+        requestedCaptionOffsetsRef.current.delete(startOffset);
+        setError("We couldn't load earlier captions. Please try again.");
+      } finally {
+        setIsLoadingMoreCaptions(false);
+      }
+    },
+    [
+      captionOrder,
+      includePrivateStudies,
+      isLoadingMoreCaptions,
+      saveProgressAtIndex,
+      studyId,
+    ]
   );
 
   const moveToCaptionIndex = useCallback(
@@ -968,16 +1092,11 @@ export function CaptionVoteFlow({
 
   const handleStartStudy = useCallback(async () => {
     if (participationPendingRef.current || !studyId) return;
-    if (participation?.started_at && !participation.ended_at) {
-      setCaptionFlipDirection("forward");
-      setIsStartPageVisible(false);
-      return;
-    }
     participationPendingRef.current = true;
     setParticipationPending(true);
     setError(null);
     try {
-      const result = await startStudy(studyId);
+      const result = await startStudy(studyId, captionOrder);
       if (!result.success) {
         setError(result.error);
         return;
@@ -992,7 +1111,7 @@ export function CaptionVoteFlow({
       participationPendingRef.current = false;
       setParticipationPending(false);
     }
-  }, [participation, studyId]);
+  }, [captionOrder, studyId]);
 
   const handleEndStudy = useCallback(async () => {
     if (
@@ -1022,7 +1141,11 @@ export function CaptionVoteFlow({
 
   const navigateToRelativeCaption = useCallback(
     (offset: -1 | 1, inputMethod: VoteInputMethod) => {
-      if (participationPendingRef.current || participation?.ended_at) return false;
+      if (
+        participationPendingRef.current ||
+        isLoadingMoreCaptions ||
+        participation?.ended_at
+      ) return false;
       if (isStartPageVisible) {
         if (offset === 1 && current) {
           void handleStartStudy();
@@ -1045,6 +1168,11 @@ export function CaptionVoteFlow({
       const nextIndex = currentIndexRef.current + offset;
 
       if (offset === -1 && nextIndex < 0 && current) {
+        if (queueStartOffset > 0) {
+          void loadPreviousCaptions(queueStartOffset);
+          return true;
+        }
+
         setCaptionFlipDirection("backward");
         setIsStartPageVisible(true);
         return true;
@@ -1079,22 +1207,29 @@ export function CaptionVoteFlow({
       }
 
       setCaptionFlipDirection(offset === 1 ? "forward" : "backward");
-      return moveToCaptionIndex(nextIndex);
+      const moved = moveToCaptionIndex(nextIndex);
+      if (moved) {
+        saveProgressAtIndex(queueStartOffset + nextIndex);
+      }
+      return moved;
     },
     [
       current,
       handleStartStudy,
-      participation?.ended_at,
-      isStartPageVisible,
-      isShowingCompletionPage,
       isLoadingMoreCaptions,
+      isShowingCompletionPage,
+      isStartPageVisible,
       loadMoreCaptions,
+      loadPreviousCaptions,
       moveToCaptionIndex,
       nextCaptionOffset,
+      participation?.ended_at,
       pauseNavigationTimer,
       pauseVoteTimer,
       queue.length,
+      queueStartOffset,
       saveForwardNavigationTelemetry,
+      saveProgressAtIndex,
     ]
   );
 

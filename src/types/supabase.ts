@@ -3659,21 +3659,30 @@ export type Database = {
       }
       study_participations: {
         Row: {
+          caption_order: string[] | null
           completion_stats: Json | null
+          current_caption_id: string | null
+          current_caption_index: number
           ended_at: string | null
           profile_id: string
           started_at: string
           study_id: number
         }
         Insert: {
+          caption_order?: string[] | null
           completion_stats?: Json | null
+          current_caption_id?: string | null
+          current_caption_index?: number
           ended_at?: string | null
           profile_id: string
           started_at?: string
           study_id: number
         }
         Update: {
+          caption_order?: string[] | null
           completion_stats?: Json | null
+          current_caption_id?: string | null
+          current_caption_index?: number
           ended_at?: string | null
           profile_id?: string
           started_at?: string
@@ -4641,6 +4650,44 @@ export type Database = {
         Args: { p_study_id: number }
         Returns: {
           completion_stats: Json | null
+          ended_at: string | null
+          profile_id: string
+          started_at: string
+          study_id: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "study_participations"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      start_study_with_order: {
+        Args: { p_caption_order: string[]; p_study_id: number }
+        Returns: {
+          caption_order: string[] | null
+          completion_stats: Json | null
+          current_caption_id: string | null
+          current_caption_index: number
+          ended_at: string | null
+          profile_id: string
+          started_at: string
+          study_id: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "study_participations"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      save_study_progress: {
+        Args: { p_caption_index: number; p_study_id: number }
+        Returns: {
+          caption_order: string[] | null
+          completion_stats: Json | null
+          current_caption_id: string | null
+          current_caption_index: number
           ended_at: string | null
           profile_id: string
           started_at: string

@@ -14,6 +14,7 @@ export function CaptionVoteSection({
   captionOrder,
   captions,
   includePrivateStudies,
+  initialStartOffset,
   initialNextOffset,
   initialTotalCaptionCount,
   initialParticipation,
@@ -25,6 +26,7 @@ export function CaptionVoteSection({
   captionOrder: string[];
   captions: CaptionForVote[];
   includePrivateStudies?: boolean;
+  initialStartOffset: number;
   initialNextOffset: number | null;
   initialTotalCaptionCount: number;
   initialParticipation: StudyParticipation | null;
@@ -36,7 +38,14 @@ export function CaptionVoteSection({
   const [isCompactHeight, setIsCompactHeight] = useState(false);
   // Server-action revalidation must not replace an active run with the revisit
   // screen or reset its caption queue. A new route entry gets a fresh snapshot.
-  const [entry] = useState({ captionOrder, captions, initialParticipation, initialNextOffset, initialTotalCaptionCount });
+  const [entry] = useState({
+    captionOrder,
+    captions,
+    initialParticipation,
+    initialStartOffset,
+    initialNextOffset,
+    initialTotalCaptionCount,
+  });
   const hasCaptions = entry.captions.length > 0;
   const showLoadErrorBanner = loadError && hasCaptions;
   const showLoadErrorState = loadError && !hasCaptions;
@@ -116,6 +125,7 @@ export function CaptionVoteSection({
             captionOrder={entry.captionOrder}
             captions={entry.captions}
             includePrivateStudies={includePrivateStudies}
+            initialStartOffset={entry.initialStartOffset}
             initialNextOffset={entry.initialNextOffset}
             initialTotalCaptionCount={entry.initialTotalCaptionCount}
             initialParticipation={entry.initialParticipation}

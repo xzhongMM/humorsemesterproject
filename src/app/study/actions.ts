@@ -9,6 +9,9 @@ export type StudyParticipationResult =
   | { success: true; participation: StudyParticipation }
   | { success: false; error: string };
 
+const CAPTION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function recordParticipation(
   studyId: number,
   action: "start_study" | "end_study",
@@ -42,8 +45,83 @@ async function recordParticipation(
   return { success: true, participation: data as StudyParticipation };
 }
 
-export async function startStudy(studyId: number): Promise<StudyParticipationResult> {
-  return recordParticipation(studyId, "start_study");
+export async function startStudy(
+  studyId: number,
+  captionOrder: string[]
+): Promise<StudyParticipationResult> {
+  if (
+    !Array.isArray(captionOrder) ||
+    captionOrder.length === 0 ||
+    captionOrder.some((captionId) => !CAPTION_ID_PATTERN.test(captionId)) ||
+    new Set(captionOrder).size !== captionOrder.length
+  ) {
+    return { success: false, error: "Could not save this study's caption order." };
+  }
+
+  if (!Number.isSafeInteger(studyId) || studyId <= 0) {
+    return { success: false, error: "Invalid study." };
+  }
+
+  const supabase = await createClient({ allowCookieWrite: true });
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Please sign in to continue." };
+
+  const { data, error } = await supabase
+    .rpc("start_study_with_order", {
+      p_caption_order: captionOrder,
+      p_study_id: studyId,
+    })
+    .single();
+
+  if (error || !data) {
+    console.error("[start_study_with_order] record participation failed", error);
+    return {
+      success: false,
+      error: "We couldn't start this study. Please try again; it may no longer be active.",
+    };
+  }
+
+  revalidatePath("/");
+  return { success: true, participation: data as StudyParticipation };
+}
+
+export async function saveStudyProgress(
+  studyId: number,
+  captionIndex: number
+): Promise<{ success: true } | { success: false; error: string }> {
+  if (
+    !Number.isSafeInteger(studyId) ||
+    studyId <= 0 ||
+    !Number.isSafeInteger(captionIndex) ||
+    captionIndex < 0
+  ) {
+    return { success: false, error: "Invalid study progress." };
+  }
+
+  const supabase = await createClient({ allowCookieWrite: true });
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Please sign in to continue." };
+
+  const { data, error } = await supabase
+    .rpc("save_study_progress", {
+      p_caption_index: captionIndex,
+      p_study_id: studyId,
+    })
+    .single();
+
+  if (error || !data) {
+    console.error("[save_study_progress] save progress failed", error);
+    return {
+      success: false,
+      error: "We couldn't save your latest study progress. Please try again.",
+    };
+  }
+
+  return { success: true };
 }
 
 export async function endStudy(studyId: number, stats: StudyStats): Promise<StudyParticipationResult> {

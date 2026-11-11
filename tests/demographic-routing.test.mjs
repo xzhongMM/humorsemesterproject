@@ -123,9 +123,10 @@ function createCaptionScenario(count = 1205) {
     client, mappings, requests, actions,
     fail(table) { failTable = table; },
     signOut() { signedIn = false; },
-    initial() {
+    initial(options = {}) {
       return studiesModule.fetchInitialActiveStudyCaptions(client, profileId, {
         includePrivateStudies: true, studyId: 1,
+        ...options,
       });
     },
     next(captionIds, studyId = 1) {
@@ -171,6 +172,51 @@ test("the full study is shuffled before batching, with every caption delivered o
   assert.deepEqual([...reopened.captionOrder].sort(), [...initial.captionOrder].sort());
 });
 
+test("resuming a study preserves its saved order and starts the lazy batch at its cursor", async (t) => {
+  t.mock.method(Math, "random", () => 0.5);
+  const scenario = createCaptionScenario(450);
+  const initial = await scenario.initial();
+  const resumeIndex = 240;
+  const resumed = await scenario.initial({
+    savedCaptionOrder: initial.captionOrder,
+    savedCurrentCaptionId: initial.captionOrder[resumeIndex],
+    savedCurrentCaptionIndex: resumeIndex,
+  });
+
+  assert.deepEqual(resumed.captionOrder, initial.captionOrder);
+  assert.equal(resumed.initialStartOffset, resumeIndex);
+  assert.equal(resumed.captions.length, 60);
+  assert.deepEqual(
+    resumed.captions.map((caption) => caption.id),
+    initial.captionOrder.slice(resumeIndex, resumeIndex + 60)
+  );
+  assert.equal(resumed.nextOffset, resumeIndex + 60);
+
+  const restoredOrder = captionOrderModule.restoreStudyCaptionOrder(
+    [captionId(1), captionId(3), captionId(4)],
+    [captionId(1), captionId(2), captionId(3)]
+  );
+  assert.deepEqual(restoredOrder, [
+    captionId(1), captionId(3), captionId(4),
+  ]);
+  assert.equal(
+    captionOrderModule.resolveStudyCaptionIndex(
+      restoredOrder,
+      captionId(3),
+      1
+    ),
+    1
+  );
+  assert.equal(
+    captionOrderModule.resolveStudyCaptionIndex(
+      restoredOrder,
+      captionId(99),
+      2
+    ),
+    2
+  );
+});
+
 test("randomized batch loading stays scoped and keeps its snapshot when mappings change", async (t) => {
   t.mock.method(Math, "random", () => 0.5);
   const scenario = createCaptionScenario(65);
@@ -190,7 +236,13 @@ test("randomized batch loading stays scoped and keeps its snapshot when mappings
 
 test("empty and small shuffled studies terminate, and load failures remain errors", async (t) => {
   const empty = await createCaptionScenario(0).initial();
-  assert.deepEqual(empty, { captionOrder: [], captions: [], error: null, nextOffset: null });
+  assert.deepEqual(empty, {
+    captionOrder: [],
+    captions: [],
+    error: null,
+    initialStartOffset: 0,
+    nextOffset: null,
+  });
   const small = await createCaptionScenario(3).initial();
   assert.equal(small.captions.length, 3);
   assert.equal(small.nextOffset, null);
@@ -323,7 +375,13 @@ function createScenario({
     ...studiesModule,
     fetchInitialActiveStudyCaptions: async (_client, _profileId, scope) => {
       captionLoads.push(scope);
-      return { captionOrder: [], captions: [], error: null, nextOffset: null };
+      return {
+        captionOrder: scope.savedCaptionOrder ?? [],
+        captions: [],
+        error: null,
+        initialStartOffset: scope.savedCurrentCaptionIndex ?? 0,
+        nextOffset: null,
+      };
     },
   };
   imports["@/lib/notification-preferences"] = loadModule("src/lib/notification-preferences.ts", imports);
@@ -497,6 +555,31 @@ test("home lists public active studies after demographics and links to each stud
   assert.doesNotMatch(studyHtml, /No studies available|No active studies/);
 });
 
+test("the study route passes the participant checkpoint to the lazy caption loader", async () => {
+  const captionOrder = [captionId(1), captionId(2), captionId(3)];
+  const currentCaptionIndex = 2;
+  const scenario = createScenario({
+    studies: [studyRow(1)],
+    participations: [{
+      profile_id: profileId,
+      study_id: 1,
+      started_at: "2026-10-01T12:00:00Z",
+      ended_at: null,
+      completion_stats: null,
+      caption_order: captionOrder,
+      current_caption_index: currentCaptionIndex,
+      current_caption_id: captionOrder[currentCaptionIndex],
+    }],
+  });
+
+  const page = await scenario.study({ params: Promise.resolve({ studyId: "1" }) });
+  const studyContent = page.props.children.find((child) => child?.props?.id === "numeric-study-content");
+  const voteSection = studyContent.props.children;
+  assert.deepEqual(scenario.captionLoads[0].savedCaptionOrder, captionOrder);
+  assert.equal(scenario.captionLoads[0].savedCurrentCaptionId, captionOrder[2]);
+  assert.equal(voteSection.props.initialStartOffset, currentCaptionIndex);
+});
+
 test("only private, upcoming, or expired studies produce the exact empty-state copy", async () => {
   const scenario = createScenario({
     answered: [1, 2],
@@ -613,7 +696,16 @@ test("study participation actions authenticate, validate, propagate failures, an
   let fail = false;
   const calls = [];
   const revalidated = [];
-  const participation = { profile_id: profileId, study_id: 1, started_at: "2026-10-01T12:00:00Z", ended_at: null };
+  const captionOrder = [captionId(1), captionId(2)];
+  const participation = {
+    profile_id: profileId,
+    study_id: 1,
+    started_at: "2026-10-01T12:00:00Z",
+    ended_at: null,
+    caption_order: captionOrder,
+    current_caption_index: 0,
+    current_caption_id: captionOrder[0],
+  };
   const actions = loadModule("src/app/study/actions.ts", {
     "@/lib/study-stats": statsModule,
     "next/cache": { revalidatePath: (path) => revalidated.push(path) },
@@ -626,22 +718,30 @@ test("study participation actions authenticate, validate, propagate failures, an
     }) },
   });
   for (const id of [0, -1, 1.2, NaN, Infinity, "1"]) {
-    assert.equal((await actions.startStudy(id)).success, false);
+    assert.equal((await actions.startStudy(id, captionOrder)).success, false);
   }
+  assert.equal((await actions.startStudy(1, [])).success, false);
+  assert.equal((await actions.startStudy(1, [captionOrder[0], captionOrder[0]])).success, false);
+  assert.equal((await actions.saveStudyProgress(1, -1)).success, false);
   signedIn = false;
   assert.equal((await actions.endStudy(1, completionStats)).success, false);
+  assert.equal((await actions.saveStudyProgress(1, 1)).success, false);
   assert.deepEqual(calls, []);
   signedIn = true;
   assert.equal((await actions.endStudy(1, { ...completionStats, likedCount: 4 })).success, false);
   assert.deepEqual(calls, []);
   fail = true;
-  assert.equal((await actions.startStudy(1)).success, false);
+  assert.equal((await actions.startStudy(1, captionOrder)).success, false);
+  assert.equal((await actions.saveStudyProgress(1, 1)).success, false);
   assert.deepEqual(revalidated, []);
   fail = false;
-  assert.deepEqual(await actions.startStudy(1), { success: true, participation });
+  assert.deepEqual(await actions.startStudy(1, captionOrder), { success: true, participation });
+  assert.deepEqual(await actions.saveStudyProgress(1, 1), { success: true });
   assert.deepEqual(await actions.endStudy(1, completionStats), { success: true, participation });
   assert.deepEqual(calls.slice(1), [
-    { name: "start_study", args: { p_study_id: 1 } },
+    { name: "save_study_progress", args: { p_caption_index: 1, p_study_id: 1 } },
+    { name: "start_study_with_order", args: { p_caption_order: captionOrder, p_study_id: 1 } },
+    { name: "save_study_progress", args: { p_caption_index: 1, p_study_id: 1 } },
     { name: "end_study", args: { p_study_id: 1, p_completion_stats: completionStats } },
   ]);
   assert.deepEqual(revalidated, ["/", "/"]);

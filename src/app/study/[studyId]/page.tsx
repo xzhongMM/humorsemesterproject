@@ -119,12 +119,22 @@ export default async function NumericStudyPage({
     captionOrder,
     captions: initialCaptions,
     error: activeStudyError,
+    initialStartOffset,
     nextOffset,
   } = skipCaptions
-    ? { captionOrder: [], captions: [], error: null, nextOffset: null }
+    ? {
+        captionOrder: [],
+        captions: [],
+        error: null,
+        initialStartOffset: 0,
+        nextOffset: null,
+      }
     : await fetchInitialActiveStudyCaptions(supabase, user.id, {
         includePrivateStudies: true,
         now: studyNow,
+        savedCaptionOrder: participation?.caption_order,
+        savedCurrentCaptionId: participation?.current_caption_id,
+        savedCurrentCaptionIndex: participation?.current_caption_index,
         studyId: studyResult.study.id,
       });
 
@@ -157,6 +167,7 @@ export default async function NumericStudyPage({
           captionOrder={captionOrder}
           captions={captionsForVote}
           includePrivateStudies
+          initialStartOffset={initialStartOffset}
           initialNextOffset={nextOffset}
           initialTotalCaptionCount={captionOrder.length}
           loadError={!!activeStudyError}

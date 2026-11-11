@@ -16,7 +16,9 @@ export async function fetchStudyParticipations(
 
   const { data, error } = await supabase
     .from("study_participations")
-    .select("profile_id, study_id, started_at, ended_at, completion_stats")
+    .select(
+      "profile_id, study_id, started_at, ended_at, completion_stats, caption_order, current_caption_index, current_caption_id"
+    )
     .eq("profile_id", profileId)
     .in("study_id", studyIds);
 
